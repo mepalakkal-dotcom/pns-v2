@@ -16,25 +16,35 @@ jobs:
           $folder = Get-ChildItem -Directory | Where-Object { $_.Name -like "surflab-*" } | Select-Object -First 1
           Rename-Item $folder.FullName "source"
 
-      - name: Patch CMakeLists to propagate static runtime to OpenMesh
+      - name: Patch CMakeLists — static runtime on OpenMesh
         shell: pwsh
         run: |
           $path = "source/CMakeLists.txt"
           $content = Get-Content $path -Raw
-
-          # Inject the runtime library flag into the OpenMesh ExternalProject_Add CMAKE_ARGS.
-          # We do this by adding a new line right after the existing CMAKE_ARGS entries.
           $needle  = "-DBUILD_SHARED_LIBS=`${OPENMESH_BUILD_SHARED}"
           $replace = "-DBUILD_SHARED_LIBS=`${OPENMESH_BUILD_SHARED}`r`n               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded"
-
           if ($content -notmatch [regex]::Escape($needle)) {
-            Write-Error "Failed to find needle to patch"
+            Write-Error "Patch failed: needle not found"
             exit 1
           }
-
           $content = $content.Replace($needle, $replace)
           Set-Content -Path $path -Value $content -NoNewline
-          Write-Host "Patched CMakeLists.txt successfully."
+
+      - name: Append legacy stdio fix
+        shell: cmd
+        run: |
+          echo.>>source\CMakeLists.txt
+          echo # Added by CI: resolve legacy stdio symbols (feof, rewind) in OpenMesh>>source\CMakeLists.txt
+          echo if(MSVC)>>source\CMakeLists.txt
+          echo   target_link_libraries(PolyhedralSplines legacy_stdio_definitions.lib)>>source\CMakeLists.txt
+          echo   target_link_libraries(PolyhedralSplinesLib legacy_stdio_definitions.lib)>>source\CMakeLists.txt
+          echo endif()>>source\CMakeLists.txt
+
+      - name: Show patched CMakeLists tail
+        shell: cmd
+        run: |
+          echo ==== LAST 30 LINES OF PATCHED CMakeLists.txt ====
+          powershell -command "Get-Content source\CMakeLists.txt | Select-Object -Last 30"
 
       - name: Configure
         shell: pwsh
