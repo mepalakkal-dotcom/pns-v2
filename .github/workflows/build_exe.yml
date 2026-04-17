@@ -1,0 +1,64 @@
+name: Build Standalone PolyhedralSplines.exe
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Download SurfLab source
+        shell: pwsh
+        run: |
+          curl -L -o source.zip "https://bitbucket.org/surflab/polyhedral_splines/get/master.zip"
+          Expand-Archive source.zip -DestinationPath .
+          $folder = Get-ChildItem -Directory | Where-Object { $_.Name -like "surflab-*" } | Select-Object -First 1
+          Rename-Item $folder.FullName "source"
+
+      - name: Configure with static runtime
+        shell: pwsh
+        run: |
+          cd source
+          # -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded tells MSVC to statically link the C++ runtime.
+          # This bakes msvcp140.dll, vcruntime140.dll, ucrtbase.dll into the .exe itself.
+          cmake -B build `
+            -G "Visual Studio 17 2022" `
+            -A x64 `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded `
+            -DBUILD_SHARED_LIBS=OFF `
+            -DOPENMESH_BUILD_SHARED=OFF
+
+      - name: Build Release
+        shell: pwsh
+        run: |
+          cd source
+          cmake --build build --config Release --parallel
+
+      - name: Find the .exe
+        id: find
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem source/build -Recurse -Filter "PolyhedralSplines.exe" | Select-Object -First 1
+          if (-not $exe) { Write-Error ".exe not found"; exit 1 }
+          echo "EXE=$($exe.FullName)" >> $env:GITHUB_OUTPUT
+          Write-Host "Built: $($exe.FullName) ($([math]::Round($exe.Length / 1MB, 2)) MB)"
+
+      - name: Verify no external DLL dependencies
+        shell: pwsh
+        run: |
+          # dumpbin is part of MSVC toolchain on windows-latest
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $dumpbin = Get-ChildItem "$vs\VC\Tools\MSVC" -Recurse -Filter "dumpbin.exe" | Where-Object { $_.FullName -like "*Hostx64\x64*" } | Select-Object -First 1
+          if ($dumpbin) {
+            Write-Host "DLL dependencies of the .exe:"
+            & $dumpbin.FullName /DEPENDENTS "${{ steps.find.outputs.EXE }}"
+          }
+
+      - name: Upload standalone .exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: PolyhedralSplines_standalone_windows
+          path: ${{ steps.find.outputs.EXE }}
+          retention-days: 90
